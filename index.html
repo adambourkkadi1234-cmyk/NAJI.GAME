@@ -1,0 +1,350 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>الناجي 3D - آخر ليلة</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#18231d;color:white;font-family:Arial,sans-serif;touch-action:none}
+button{font-weight:bold;border:1px solid #a9bca8;border-radius:12px;background:#243d32;color:white;padding:12px;touch-action:none}
+#hud{position:fixed;top:8px;right:8px;z-index:2;background:#10251ddd;padding:10px;border-radius:12px;line-height:1.8;font-size:13px}
+#mission{position:fixed;top:8px;left:8px;z-index:2;background:#10251ddd;padding:10px;border-radius:12px;max-width:45%;font-size:12px}
+#controls{position:fixed;inset:0;pointer-events:none;z-index:3}
+#joy{position:absolute;bottom:22px;left:20px;width:116px;height:116px;border-radius:50%;background:#ffffff25;border:2px solid #ffffff88;pointer-events:auto;touch-action:none}
+#stick{position:absolute;left:34px;top:34px;width:44px;height:44px;border-radius:50%;background:#ffffffbb}
+#actions{position:absolute;bottom:24px;right:12px;display:grid;grid-template-columns:repeat(2,78px);gap:8px;pointer-events:auto}
+#actions button{height:58px;font-size:13px;padding:5px}
+#look{position:absolute;inset:120px 130px 155px 145px;pointer-events:auto;touch-action:none}
+#hint{position:fixed;bottom:155px;left:12px;z-index:2;background:#10251dcc;border-radius:8px;padding:7px;font-size:11px}
+#overlay{display:none;position:fixed;inset:0;background:#000d;z-index:8;align-items:center;justify-content:center;text-align:center}
+#panel{background:#21372d;padding:25px;border-radius:18px;width:85%;max-width:350px}
+#panel button{margin:5px}
+</style>
+</head>
+<body>
+<div id="hud">
+  <b>🧟 الناجي 3D</b><br>
+  ❤️ الحياة: <span id="hp">100</span><br>
+  🔫 الذخيرة: <span id="ammo">12</span>/<span id="reserve">48</span><br>
+  🪵 الخشب: <span id="wood">0</span> | 🔩 الحديد: <span id="metal">0</span><br>
+  ☠️ الزومبي: <span id="left">5</span><br>
+  ⭐ النقط: <span id="score">0</span>
+</div>
+<div id="mission">🎯 المهمة 1<br><span id="objective">قلب على صندوق الموارد</span></div>
+<div id="hint">حرّك العصا، وسحب الشاشة باش تبدّل اتجاه الكاميرا</div>
+<div id="controls">
+  <div id="look"></div>
+  <div id="joy"><div id="stick"></div></div>
+  <div id="actions">
+    <button id="shoot">🔫 ضرب</button>
+    <button id="reload">🔄 عمّر</button>
+    <button id="collect">📦 جمع</button>
+    <button id="craft">🛠️ صنع حاجز</button>
+  </div>
+</div>
+<div id="overlay"><div id="panel">
+  <h2 id="endTitle">سالات اللعبة</h2>
+  <p id="endText"></p>
+  <button onclick="location.reload()">عاود اللعب</button>
+</div></div>
+
+<script type="module">
+import * as THREE from
+'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+
+// إعداد العالم والكاميرا
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x91a39a);
+scene.fog=new THREE.Fog(0x91a39a,35,100);
+
+const camera=new THREE.PerspectiveCamera(65,innerWidth/innerHeight,.1,180);
+const renderer=new THREE.WebGLRenderer({antialias:false});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.shadowMap.enabled=false;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xd8e8ff,0x34402a,2));
+const sun=new THREE.DirectionalLight(0xffe2b7,2);
+sun.position.set(12,25,8);
+scene.add(sun);
+
+const mat=(color)=>new THREE.MeshStandardMaterial({color,roughness:1});
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(180,180),mat(0x52694a));
+ground.rotation.x=-Math.PI/2;
+scene.add(ground);
+
+const road=new THREE.Mesh(new THREE.PlaneGeometry(8,180),mat(0x777064));
+road.rotation.x=-Math.PI/2;road.position.y=.025;scene.add(road);
+
+const obstacles=[];
+const resources=[];
+const zombies=[];
+
+function box(x,y,z,w,h,d,color,solid=false){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(color));
+  m.position.set(x,y,z);scene.add(m);
+  if(solid)obstacles.push({x,z,w,d});
+  return m;
+}
+
+function tree(x,z){
+  const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.2,.35,2,6),mat(0x63452c));
+  trunk.position.set(x,1,z);scene.add(trunk);
+  const crown=new THREE.Mesh(new THREE.ConeGeometry(1.4,3.3,6),mat(0x254b32));
+  crown.position.set(x,3.1,z);scene.add(crown);
+  obstacles.push({x,z,w:.7,d:.7});
+}
+
+function house(x,z){
+  box(x,1.5,z,6,3,5,0x84765e,true);
+  box(x,3.6,z,6.8,.6,5.8,0x453b32);
+  box(x,1,z-2.53,1.15,2, .08,0x292b25);
+  // نافذة
+  box(x-1.8,1.9,z-2.58,.9,.8,.1,0x9ab5ad);
+  box(x+1.8,1.9,z-2.58,.9,.8,.1,0x9ab5ad);
+}
+
+for(let i=0;i<95;i++){
+  const x=(Math.random()-.5)*100,z=(Math.random()-.5)*120;
+  if(Math.abs(x)>7 && Math.hypot(x,z)>10)tree(x,z);
+}
+house(-12,-12);house(13,-23);house(-15,-34);house(14,8);
+
+// اللاعب
+function person(color,isZombie=false){
+  const g=new THREE.Group();
+  const torso=new THREE.Mesh(new THREE.BoxGeometry(.75,1,.43),mat(color));
+  torso.position.y=1.15;g.add(torso);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(.3,8,7),mat(isZombie?0x7c9c71:0xcda580));
+  head.position.y=1.9;g.add(head);
+  const legmat=mat(isZombie?0x343d32:0x263b55);
+  for(const x of [-.22,.22]){
+    const leg=new THREE.Mesh(new THREE.BoxGeometry(.23,.7,.27),legmat);
+    leg.position.set(x,.4,0);g.add(leg);
+  }
+  const armMat=mat(isZombie?0x79966e:color);
+  for(const x of [-.5,.5]){
+    const arm=new THREE.Mesh(new THREE.BoxGeometry(.2,.75,.22),armMat);
+    arm.position.set(x,1.15,0);arm.rotation.z=x*.3;g.add(arm);
+  }
+  return g;
+}
+
+const player=person(0x287ed1);
+scene.add(player);player.position.set(0,0,2);
+
+// سلاح صغير قدام الشخصية
+const gun=box(0,.95,0,.18,.18,.65,0x292d30);
+gun.position.set(.45,1.25,-.35);
+player.add(gun);
+
+function addZombie(x,z){
+  const mesh=person(0x66875c,true);
+  mesh.position.set(x,0,z);scene.add(mesh);
+  zombies.push({mesh,hp:2,attack:0,speed:.65+Math.random()*.3});
+}
+for(let i=0;i<5;i++)addZombie((Math.random()-.5)*25,-10-Math.random()*25);
+
+// صناديق الموارد
+function crate(x,z){
+  const mesh=box(x,.45,z,.9,.9,.9,0x9b6734,true);
+  resources.push({mesh,wood:2,metal:1,taken:false});
+}
+crate(4,-5);crate(-9,-18);crate(11,-29);crate(-5,-39);
+crate(19,4);crate(-22,7);
+
+let hp=100,ammo=12,reserve=48,wood=0,metal=0,score=0;
+let mission=1,gameOver=false,fireWait=0,reloadWait=0;
+const $=id=>document.getElementById(id);
+function updateUI(){
+ $('hp').textContent=hp;$('ammo').textContent=ammo;
+ $('reserve').textContent=reserve;$('wood').textContent=wood;
+ $('metal').textContent=metal;$('left').textContent=zombies.length;
+ $('score').textContent=score;
+ $('objective').textContent=mission===1?'جمع الموارد من الصناديق':
+ mission===2?'قضي على 3 زومبي':'وصل للنقطة ديال النجاة';
+ $('mission').firstChild.textContent='🎯 المهمة '+mission+' ';
+}
+function finish(win){
+ if(gameOver)return;gameOver=true;
+ $('overlay').style.display='flex';
+ $('endTitle').textContent=win?'نجحتي يا بطل!':'سالات اللعبة!';
+ $('endText').textContent=win?'كملتي المهمات ديال النجاة!':'النقط ديالك: '+score;
+}
+
+// تحكم اللمس
+const joy=$('joy'),stick=$('stick'),look=$('look');
+const move={x:0,y:0};
+let joyId=null,lastLook=null,yaw=0,pitch=.28;
+function joyMove(e){
+ const r=joy.getBoundingClientRect();
+ let x=e.clientX-r.left-r.width/2,y=e.clientY-r.top-r.height/2;
+ const l=Math.hypot(x,y);
+ if(l>38){x*=38/l;y*=38/l;}
+ move.x=x/38;move.y=y/38;
+ stick.style.left=34+x+'px';stick.style.top=34+y+'px';
+}
+joy.addEventListener('pointerdown',e=>{
+ joyId=e.pointerId;joy.setPointerCapture(e.pointerId);joyMove(e);
+});
+joy.addEventListener('pointermove',e=>{if(e.pointerId===joyId)joyMove(e)});
+function stopJoy(){
+ joyId=null;move.x=move.y=0;stick.style.left='34px';stick.style.top='34px';
+}
+joy.addEventListener('pointerup',stopJoy);
+joy.addEventListener('pointercancel',stopJoy);
+
+look.addEventListener('pointerdown',e=>{
+ lastLook={x:e.clientX,y:e.clientY,id:e.pointerId};
+ look.setPointerCapture(e.pointerId);
+});
+look.addEventListener('pointermove',e=>{
+ if(!lastLook||lastLook.id!==e.pointerId)return;
+ yaw-=(e.clientX-lastLook.x)*.008;
+ pitch=THREE.MathUtils.clamp(pitch+(e.clientY-lastLook.y)*.004,-.1,.8);
+ lastLook.x=e.clientX;lastLook.y=e.clientY;
+});
+look.addEventListener('pointerup',()=>lastLook=null);
+look.addEventListener('pointercancel',()=>lastLook=null);
+
+const keys={};
+addEventListener('keydown',e=>keys[e.key.toLowerCase()]=true);
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+
+// إطلاق النار باتجاه وسط الشاشة
+const raycaster=new THREE.Raycaster();
+$('shoot').addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ if(gameOver||fireWait>0)return;
+ if(ammo<=0){$('objective').textContent='ما بقاتش الذخيرة! عمّر السلاح';return;}
+ ammo--;fireWait=.35;
+ raycaster.setFromCamera(new THREE.Vector2(0,0),camera);
+ let best=null,bestD=24;
+ for(const z of zombies){
+   const p=z.mesh.position.clone().add(new THREE.Vector3(0,1,0));
+   const to=p.sub(camera.position);
+   const d=to.length();
+   const angle=raycaster.ray.direction.angleTo(to.normalize());
+   if(angle<.13&&d<bestD){best=z;bestD=d;}
+ }
+ if(best){
+   best.hp--;
+   if(best.hp<=0){
+     scene.remove(best.mesh);
+     zombies.splice(zombies.indexOf(best),1);
+     score+=10;
+   }
+ }
+ updateUI();
+});
+
+$('reload').addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ if(gameOver||reloadWait>0||ammo===12||reserve===0)return;
+ reloadWait=1;
+ const n=Math.min(12-ammo,reserve);
+ ammo+=n;reserve-=n;updateUI();
+});
+
+$('collect').addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ let found=false;
+ for(const r of resources){
+   if(!r.taken&&r.mesh.position.distanceTo(player.position)<3){
+     r.taken=true;scene.remove(r.mesh);
+     wood+=r.wood;metal+=r.metal;score+=5;found=true;
+   }
+ }
+ if(!found)$('objective').textContent='قرب للصندوق باش تجمع الموارد';
+ updateUI();
+});
+
+$('craft').addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ if(wood>=3&&metal>=1){
+   wood-=3;metal-=1;
+   const p=player.position.clone();
+   const b=box(p.x,0.7,p.z-2,2.5,1.4,.3,0x89603b,true);
+   score+=5;updateUI();
+ }else{
+   $('objective').textContent='خاصك 3 خشب و1 حديد لصناعة حاجز';
+ }
+});
+
+// كاميرا كتدور حول اللاعب
+const clock=new THREE.Clock();
+function animate(){
+ requestAnimationFrame(animate);
+ const dt=Math.min(clock.getDelta(),.05);
+ if(!gameOver){
+   fireWait=Math.max(0,fireWait-dt);
+   reloadWait=Math.max(0,reloadWait-dt);
+
+   let x=move.x,z=move.y;
+   if(keys.a||keys.arrowleft)x=-1;
+   if(keys.d||keys.arrowright)x=1;
+   if(keys.w||keys.arrowup)z=-1;
+   if(keys.s||keys.arrowdown)z=1;
+
+   const forward=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw));
+   const right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
+   const dir=forward.multiplyScalar(-z).add(right.multiplyScalar(x));
+   if(dir.length()>1)dir.normalize();
+
+   player.position.addScaledVector(dir,4*dt);
+   player.position.x=THREE.MathUtils.clamp(player.position.x,-65,65);
+   player.position.z=THREE.MathUtils.clamp(player.position.z,-65,65);
+   if(dir.length()>.01)player.rotation.y=Math.atan2(dir.x,dir.z);
+
+   for(const zmb of zombies){
+     const z=zmb.mesh;
+     const dx=player.position.x-z.position.x,dz=player.position.z-z.position.z;
+     const dist=Math.hypot(dx,dz);
+     if(dist>1.5){
+       z.position.x+=dx/dist*zmb.speed*dt;
+       z.position.z+=dz/dist*zmb.speed*dt;
+       z.rotation.y=Math.atan2(dx,dz);
+     }else{
+       zmb.attack-=dt;
+       if(zmb.attack<=0){
+         hp=Math.max(0,hp-5);zmb.attack=.9;
+         $('hp').textContent=hp;
+         if(hp<=0)finish(false);
+       }
+     }
+   }
+
+   // المهام كتتبدل حسب التقدم
+   if(mission===1&&resources.every(r=>r.taken))mission=2;
+   if(mission===2&&score>=30)mission=3;
+   if(mission===3&&player.position.distanceTo(new THREE.Vector3(0,0,-48))<4)finish(true);
+   updateUI();
+ }
+
+ const target=new THREE.Vector3(
+   player.position.x,player.position.y+1.1,player.position.z
+ );
+ const distance=7;
+ const camPos=new THREE.Vector3(
+   player.position.x+Math.sin(yaw)*distance,
+   player.position.y+3+pitch*3,
+   player.position.z+Math.cos(yaw)*distance
+ );
+ camera.position.lerp(camPos,.12);
+ camera.lookAt(target);
+
+ renderer.render(scene,camera);
+}
+updateUI();animate();
+
+addEventListener('resize',()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
